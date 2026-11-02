@@ -36,6 +36,16 @@ It has low liquidity with only $3,726 and virtually no trades.
 This market price is not considered reliable due to these conditions. (GeckoTerminal)
 ```
 
+### Browser web app (Streamlit)
+
+```bash
+streamlit run app.py
+```
+
+This opens http://localhost:8501. Type a question or click an example button. The app shows
+the **tool call** and the **3-line answer**. `app.py` reuses `build_agent()` from
+`weather_news.py`, so the terminal version and the web version use the same agent.
+
 The full demo for 4 questions is in [`demo_run.txt`](demo_run.txt). It covers the FreqX rate,
 "what is Frequency Chain", today's crypto news, and a weather question that the agent politely
 refuses.

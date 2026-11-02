@@ -3,3 +3,4 @@ autogen-ext[openai]==0.7.5
 ddgs
 requests
 python-dotenv
+streamlit

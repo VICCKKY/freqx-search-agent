@@ -88,21 +88,24 @@ SYSTEM_MESSAGE = """You are a 3-line crypto search engine.
 - Never tell the user to buy, sell or hold. Only report news and prices."""
 
 
-query = input("Ask about crypto (e.g. 'FreqX coin rate today'): ")
-model_client = OpenAIChatCompletionClient(model="gpt-4o-mini")  # key from OPENAI_API_KEY
-
-agent = AssistantAgent(
-    name="crypto_news",
-    model_client=model_client,
-    tools=[search_crypto_news, get_crypto_price, get_frecx_price],
-    system_message=SYSTEM_MESSAGE,
-    reflect_on_tool_use=True,  # write a 3-line answer from the results, not raw output
-)
+def build_agent(model_client: OpenAIChatCompletionClient) -> AssistantAgent:
+    """Create the agent. Also used by the Streamlit web app (app.py)."""
+    return AssistantAgent(
+        name="crypto_news",
+        model_client=model_client,
+        tools=[search_crypto_news, get_crypto_price, get_frecx_price],
+        system_message=SYSTEM_MESSAGE,
+        reflect_on_tool_use=True,  # write a 3-line answer from the results, not raw output
+    )
 
 
 async def main():
+    query = input("Ask about crypto (e.g. 'FreqX coin rate today'): ")
+    model_client = OpenAIChatCompletionClient(model="gpt-4o-mini")  # key from OPENAI_API_KEY
+    agent = build_agent(model_client)
     await Console(agent.run_stream(task=f"Answer in exactly 3 short lines: {query}"))
     await model_client.close()
 
 
-asyncio.run(main())
+if __name__ == "__main__":  # runs only with "python weather_news.py", not when app.py imports it
+    asyncio.run(main())
