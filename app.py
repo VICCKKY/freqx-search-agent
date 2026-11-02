@@ -19,7 +19,7 @@ st.caption("3-line live crypto search · focus on FreCx (FreqX / Frequency X Cha
 
 async def ask(question: str):
     """Run the agent once and return (tools it called, final 3-line answer)."""
-    model_client = OpenAIChatCompletionClient(model="gpt-4o-mini")
+    model_client = OpenAIChatCompletionClient(model="gpt-4o-mini", temperature=0)
     agent = build_agent(model_client)
     result = await agent.run(task=f"Answer in exactly 3 short lines: {question}")
     await model_client.close()

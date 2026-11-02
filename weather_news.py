@@ -6,6 +6,7 @@ Run:  python weather_news.py
 """
 
 import asyncio
+import time
 
 import requests
 from autogen_agentchat.agents import AssistantAgent
@@ -19,6 +20,22 @@ load_dotenv()  # reads OPENAI_API_KEY from the .env file into the environment
 # FreCx bridged token on Polygon + its only DEX pool (checked 2026-11-02)
 FRECX_TOKEN = "0xaba6872eaae08a8dc61bd080731e8bcdcfbce6f1"
 FRECX_POOL = "https://www.geckoterminal.com/polygon_pos/pools/0x70a4677ad9ec521609ec609742b44f177fda68ff77cc80641514b01a67de54a6"
+
+_cache = {}  # url -> (time, json). Free price APIs rate-limit us, so reuse answers for 60s.
+
+
+def get_json(url: str, params: dict | None = None) -> dict | None:
+    """Fetch JSON from a free API. Retries when rate-limited; returns None if it still fails."""
+    key = url + str(params)
+    if key in _cache and time.time() - _cache[key][0] < 60:
+        return _cache[key][1]
+    for wait in (0, 3, 8):  # try now, then after 3s, then after 8s
+        time.sleep(wait)
+        resp = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=15)
+        if resp.status_code == 200:
+            _cache[key] = (time.time(), resp.json())
+            return resp.json()
+    return None
 
 
 def search_crypto_news(query: str) -> str:
@@ -42,16 +59,19 @@ def get_crypto_price(coin: str) -> str:
     """Get the LIVE price (USD and INR) and 24h change of a cryptocurrency from CoinGecko.
     `coin` is a name or symbol like "bitcoin", "ETH" or "solana".
     For FreCx / FreqX / Frequency Chain use get_frecx_price instead."""
-    found = requests.get("https://api.coingecko.com/api/v3/search", params={"query": coin}, timeout=15).json()
+    found = get_json("https://api.coingecko.com/api/v3/search", {"query": coin})
+    if found is None:
+        return "PRICE UNAVAILABLE right now (CoinGecko rate limit). Ask again in a minute."
     if not found.get("coins"):
         return f"'{coin}' is not listed on CoinGecko."
     coin_id = found["coins"][0]["id"]
-    price = requests.get(
+    price = get_json(
         "https://api.coingecko.com/api/v3/simple/price",
-        params={"ids": coin_id, "vs_currencies": "usd,inr", "include_24hr_change": "true"},
-        timeout=15,
-    ).json()[coin_id]
-    return f"{coin_id}: {price} | source: https://www.coingecko.com/en/coins/{coin_id}"
+        {"ids": coin_id, "vs_currencies": "usd,inr", "include_24hr_change": "true"},
+    )
+    if not price or coin_id not in price:
+        return "PRICE UNAVAILABLE right now (CoinGecko rate limit). Ask again in a minute."
+    return f"{coin_id}: {price[coin_id]} | source: https://www.coingecko.com/en/coins/{coin_id}"
 
 
 def get_frecx_price() -> str:
@@ -59,8 +79,10 @@ def get_frecx_price() -> str:
     Polygon DEX pool on GeckoTerminal, with liquidity and 24h trading volume.
     FreCx is NOT listed on CoinGecko or CoinMarketCap."""
     url = f"https://api.geckoterminal.com/api/v2/networks/polygon_pos/tokens/{FRECX_TOKEN}/pools"
-    pools = requests.get(url, headers={"Accept": "application/json"}, timeout=15).json()["data"]
-    pool = max(pools, key=lambda p: float(p["attributes"]["reserve_in_usd"] or 0))["attributes"]
+    data = get_json(url)
+    if not data or not data.get("data"):
+        return "FreCx PRICE UNAVAILABLE right now (GeckoTerminal rate limit). Ask again in a minute."
+    pool = max(data["data"], key=lambda p: float(p["attributes"]["reserve_in_usd"] or 0))["attributes"]
     liquidity = float(pool["reserve_in_usd"] or 0)
     volume = float(pool["volume_usd"]["h24"] or 0)
     note = ""
@@ -84,7 +106,10 @@ SYSTEM_MESSAGE = """You are a 3-line crypto search engine.
 - Reply in EXACTLY 3 short lines, one fact per line, separated by line breaks.
   Put the source in brackets at the END of each line, e.g. "... (CoinDesk)".
   Never add a 4th line for sources.
-- If a price has a low-liquidity warning, mention it.
+- If a tool returns a price, ALWAYS report that exact price, even when it has a
+  low-liquidity warning (then mention the warning too).
+- If a tool says PRICE UNAVAILABLE, say that and ask the user to try again in a minute.
+  NEVER invent or estimate a price.
 - Never tell the user to buy, sell or hold. Only report news and prices."""
 
 
@@ -101,7 +126,7 @@ def build_agent(model_client: OpenAIChatCompletionClient) -> AssistantAgent:
 
 async def main():
     query = input("Ask about crypto (e.g. 'FreqX coin rate today'): ")
-    model_client = OpenAIChatCompletionClient(model="gpt-4o-mini")  # key from OPENAI_API_KEY
+    model_client = OpenAIChatCompletionClient(model="gpt-4o-mini", temperature=0)  # key from OPENAI_API_KEY
     agent = build_agent(model_client)
     await Console(agent.run_stream(task=f"Answer in exactly 3 short lines: {query}"))
     await model_client.close()
