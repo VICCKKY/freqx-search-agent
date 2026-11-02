@@ -7,13 +7,16 @@ Run:  python weather_news.py
 
 import asyncio
 import time
+from typing import Literal
 
 import requests
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.ui import Console
+from autogen_core.tools import FunctionTool
 from autogen_ext.models.openai import OpenAIChatCompletionClient
 from ddgs import DDGS
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 
 load_dotenv()  # reads OPENAI_API_KEY from the .env file into the environment
 
@@ -113,14 +116,48 @@ SYSTEM_MESSAGE = """You are a 3-line crypto search engine.
 - Never tell the user to buy, sell or hold. Only report news and prices."""
 
 
-def build_agent(model_client: OpenAIChatCompletionClient) -> AssistantAgent:
-    """Create the agent. Also used by the Streamlit web app (app.py)."""
+# --- Structured "Top 3 cards" mode, used by the web app (app.py) ---
+
+class NewsCard(BaseModel):
+    headline: str
+    source: str  # site name, e.g. "CoinDesk" or "GeckoTerminal"
+    url: str = Field(description="URL copied EXACTLY from a tool result")
+    published: str = Field(description="date/time from the tool result, or 'live' for a price")
+    summary: str = Field(description="max 2 short sentences")
+    sentiment: Literal["Bullish", "Bearish", "Neutral"]
+    relevance: int = Field(description="percentage 0-100: how well this answers the question")
+
+
+class Top3Results(BaseModel):
+    on_topic: bool  # False if the question is not about crypto
+    message: str  # one short line for the user (refusal, or "" when there are cards)
+    cards: list[NewsCard]  # EXACTLY 3 when on_topic, otherwise empty
+
+
+TOP3_RULES = """
+WEB APP MODE: instead of 3 lines, return EXACTLY 3 cards, ranked by relevance (best first).
+- Each card is one distinct result from the tools: its headline, source site, url,
+  published date/time (use "live" for prices) and a 2-sentence summary.
+- For a price question, call the price tool AND search_crypto_news for that coin.
+  Card 1 is the price result (with any liquidity warning in the summary); cards 2-3
+  come from the search results.
+- Every card must come from a tool result: copy its url EXACTLY. Never make up a
+  headline, source, url or date. If the tools gave fewer than 3 results, return fewer cards.
+- Off-topic question: on_topic=false, cards=[], message = one polite line."""
+
+
+def build_agent(model_client: OpenAIChatCompletionClient, top3_cards: bool = False) -> AssistantAgent:
+    """Create the agent. app.py passes top3_cards=True to get 3 structured cards."""
+    tools = [search_crypto_news, get_crypto_price, get_frecx_price]
+    if top3_cards:  # OpenAI structured output needs "strict" tools; the docstring stays the description
+        tools = [FunctionTool(f, description=f.__doc__, strict=True) for f in tools]
     return AssistantAgent(
         name="crypto_news",
         model_client=model_client,
-        tools=[search_crypto_news, get_crypto_price, get_frecx_price],
-        system_message=SYSTEM_MESSAGE,
+        tools=tools,
+        system_message=SYSTEM_MESSAGE + (TOP3_RULES if top3_cards else ""),
         reflect_on_tool_use=True,  # write a 3-line answer from the results, not raw output
+        output_content_type=Top3Results if top3_cards else None,
     )
 
 
